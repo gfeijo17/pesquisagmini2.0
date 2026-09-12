@@ -2,7 +2,7 @@ import os
 import datetime
 import streamlit as st
 import requests
-import google.generativeai as genai
+from google import genai
 
 st.set_page_config(page_title="Pesquisador Gemini Notebook", page_icon="🔍", layout="wide")
 
@@ -10,15 +10,14 @@ st.title("🔍 Pesquisador de Assuntos Recentes & Gemini")
 st.markdown("Busque informações das últimas 36 horas, selecione as fontes e envie para análise do Gemini.")
 
 # ==============================================================================
-# CONFIGURAÇÃO AUTOMÁTICA DAS CHAVES (COLE SUAS CHAVES AQUI SE PREFERIR)
+# CONFIGURAÇÃO DAS CHAVES
 # ==============================================================================
-GEMINI_KEY_PADRAO = "AQ.Ab8RN6IjIonUWlBXKv-rifYP8TYxHzqLX4JvJPHsmwsu3LTowQ"
-SERPER_KEY_PADRAO = ""
+GEMINI_KEY_PADRAO = "SUA_CHAVE_DO_GEMINI_AQUI"
+SERPER_KEY_PADRAO = "SUA_CHAVE_DO_SERPER_AQUI"
 # ==============================================================================
 
-# Busca chave dos Secrets do Streamlit ou usa a chave informada direto no código
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", GEMINI_KEY_PADRAO)
-serper_api_key = st.secrets.get("SERPER_API_KEY", SERPER_KEY_PADRAO)
+gemini_api_key = st.secrets.get("GEMINI_API_KEY", GEMINI_KEY_PADRAO).strip()
+serper_api_key = st.secrets.get("SERPER_API_KEY", SERPER_KEY_PADRAO).strip()
 
 # --- BARRA LATERAL INFORMATIVA ---
 with st.sidebar:
@@ -26,7 +25,7 @@ with st.sidebar:
     if gemini_api_key and gemini_api_key != "SUA_CHAVE_DO_GEMINI_AQUI":
         st.success("✅ Gemini API Conectada")
     else:
-        st.error("❌ Gemini API não configurada")
+        st.error("❌ Configure sua GEMINI_API_KEY nos Secrets do Streamlit")
         
     if serper_api_key and serper_api_key != "SUA_CHAVE_DO_SERPER_AQUI":
         st.success("✅ Busca Google News (Serper) Ativa")
@@ -66,7 +65,7 @@ if st.button("Buscar conteúdos (Últimas 36h)", type="primary"):
             st.session_state['resultados'] = buscar_noticias_36h(termo_busca, serper_api_key)
             st.session_state['termo_pesquisado'] = termo_busca
 
-# --- 3. SELEÇÃO COM CHECKBOXES (FLAGS) ---
+# --- 3. SELEÇÃO COM CHECKBOXES ---
 if 'resultados' in st.session_state and st.session_state['resultados']:
     st.subheader(f"Resultados encontrados para: '{st.session_state['termo_pesquisado']}'")
     st.write("Marque as fontes e produções documentais que deseja analisar:")
@@ -111,11 +110,12 @@ if 'resultados' in st.session_state and st.session_state['resultados']:
 
         if enviar_notebook:
             if not gemini_api_key or gemini_api_key == "SUA_CHAVE_DO_GEMINI_AQUI":
-                st.error("Configure a Gemini API Key para continuar.")
+                st.error("Configure sua GEMINI_API_KEY nos Secrets do Streamlit Cloud.")
             else:
                 with st.spinner("Sintetizando fontes e gerando o relatório..."):
                     try:
-                        genai.configure(api_key=gemini_api_key)
+                        # Inicializa o cliente oficial da nova SDK
+                        client = genai.Client(api_key=gemini_api_key)
                         
                         contexto_fontes = "\n\n".join([
                             f"Título: {f['title']}\nFonte: {f['source']}\nLink: {f['link']}\nTrecho: {f['snippet']}"
@@ -134,10 +134,11 @@ if 'resultados' in st.session_state and st.session_state['resultados']:
                         Sempre cite as fontes/links fornecidos quando mencionar informações específicas.
                         """
                         
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        response = model.generate_content(prompt_sistema)
+                        response = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=prompt_sistema
+                        )
                         
-                        # Salva o resultado na sessão para não perder no refresh
                         st.session_state['relatorio_gerado'] = response.text
                         st.session_state['modelo_escolhido'] = modelo_consumo
                         
@@ -150,7 +151,6 @@ if 'resultados' in st.session_state and st.session_state['resultados']:
             st.subheader(f"📑 Resultado: {st.session_state['modelo_escolhido']}")
             st.markdown(st.session_state['relatorio_gerado'])
 
-            # Prepara o conteúdo em formato legível de texto
             data_atual = datetime.datetime.now().strftime("%d/%m/%Y às %H:%M")
             conteudo_download = f"""================================================================================
 RELATÓRIO DE PESQUISA: {st.session_state['termo_pesquisado'].upper()}
@@ -166,7 +166,6 @@ Fontes Utilizadas na Análise:
             for f in fontes_selecionadas:
                 conteudo_download += f"- {f['title']} ({f['source']}): {f['link']}\n"
 
-            # Nome do arquivo de download
             nome_arquivo = f"pesquisa_{st.session_state['termo_pesquisado'].lower().replace(' ', '_')}.txt"
 
             st.write("---")
