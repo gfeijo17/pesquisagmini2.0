@@ -40,7 +40,7 @@ if st.button("Executar Pesquisa e Gerar Podcast", type="primary"):
         st.markdown("---")
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        # PASSO 1: Busca Nativa no Google Acadêmico
+        # PASSO 1: Busca Nativa no Google Acadêmico via Gemini (Sem Serper)
         with st.spinner("1/2 - Buscando os 5 principais artigos científicos em português..."):
             prompt_busca = f"""
             Pesquise no Google Acadêmico exatamente 5 artigos científicos e produções acadêmicas em PORTUGUÊS (Brasil) sobre o tema: "{termo_busca}".
@@ -65,7 +65,7 @@ if st.button("Executar Pesquisa e Gerar Podcast", type="primary"):
                 st.subheader("📚 5 Artigos Acadêmicos Encontrados:")
                 st.markdown(response_busca.text)
 
-                # Extrai links de grounding das fontes
+                # Extrai links de fontes da busca
                 urls_encontradas = []
                 if response_busca.candidates and response_busca.candidates[0].grounding_metadata:
                     metadata = response_busca.candidates[0].grounding_metadata
@@ -102,7 +102,7 @@ if st.button("Executar Pesquisa e Gerar Podcast", type="primary"):
                 st.stop()
 
         # PASSO 2: Geração do Roteiro de Podcast (Audio Overview)
-        with st.spinner("2/2 - Gerando o Roteiro do Podcast (estilo NotebookLM)..."):
+        with st.spinner("2/2 - Gerando o Roteiro do Podcast..."):
             try:
                 prompt_podcast = f"""
                 Você é um roteirista de podcasts acadêmicos e educacionais.
