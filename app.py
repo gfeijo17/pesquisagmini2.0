@@ -13,7 +13,7 @@ st.markdown("Busca 5 artigos em português no Google Acadêmico via Gemini, disp
 # ==============================================================================
 # CHAVE DE API DO GEMINI
 # ==============================================================================
-GEMINI_API_KEY = st.secrets.get("AQ.Ab8RN6IjIonUWlBXKv-rifYP8TYxHzqLX4JvJPHsmwsu3LTowQ", "").strip()
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip()
 
 # --- FUNÇÃO DE DOWNLOAD DO PDF ---
 @st.cache_data(show_spinner=False)
