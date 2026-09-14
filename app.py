@@ -1,181 +1,178 @@
 import os
+import io
 import datetime
-import streamlit as st
 import requests
+import streamlit as st
 from google import genai
+from google.genai import types
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
-st.set_page_config(page_title="Pesquisador Gemini Notebook", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Pesquisador Acadêmico & Gemini", page_icon="🎓", layout="wide")
 
-st.title("🔍 Pesquisador de Assuntos Recentes & Gemini")
-st.markdown("Busque informações das últimas 36 horas, selecione as fontes e envie para análise do Gemini.")
+st.title("🎓 Pesquisador Acadêmico (Busca Nativa Gemini & Drive)")
+st.markdown("Busca artigos científicos em português no Google Acadêmico/Web nativamente pelo Gemini, baixa os PDFs e organiza no seu Google Drive.")
 
 # ==============================================================================
-# CONFIGURAÇÃO DAS CHAVES
+# CONFIGURAÇÃO DE CHAVES E TOKENS
 # ==============================================================================
-GEMINI_KEY_PADRAO = "SUA_CHAVE_DO_GEMINI_AQUI"
-SERPER_KEY_PADRAO = "SUA_CHAVE_DO_SERPER_AQUI"
-# ==============================================================================
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip()
+GOOGLE_DRIVE_TOKEN = st.secrets.get("GOOGLE_DRIVE_TOKEN", None)
 
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", GEMINI_KEY_PADRAO).strip()
-serper_api_key = st.secrets.get("SERPER_API_KEY", SERPER_KEY_PADRAO).strip()
+# --- FUNÇÃO 1: DOWNLOAD DO PDF ---
+def baixar_pdf(url):
+    """Tenta realizar o download do PDF a partir de um link."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        if res.status_code == 200 and ('pdf' in res.headers.get('Content-Type', '').lower() or url.lower().endswith('.pdf')):
+            return res.content
+    except Exception:
+        pass
+    return None
 
-# --- BARRA LATERAL INFORMATIVA ---
-with st.sidebar:
-    st.header("⚙️ Status da Conexão")
-    if gemini_api_key and gemini_api_key != "SUA_CHAVE_DO_GEMINI_AQUI":
-        st.success("✅ Gemini API Conectada")
-    else:
-        st.error("❌ Configure sua GEMINI_API_KEY nos Secrets do Streamlit")
-        
-    if serper_api_key and serper_api_key != "SUA_CHAVE_DO_SERPER_AQUI":
-        st.success("✅ Busca Google News (Serper) Ativa")
-    else:
-        st.info("ℹ️ Modo de busca demonstrativo ativo")
+# --- FUNÇÃO 2: CRIAR PASTA E SALVAR NO GOOGLE DRIVE ---
+def salvar_no_google_drive(nome_pesquisa, arquivos_pdf):
+    """Cria pasta 'nome-da-pesquisa_DD/MM/AAAA' e envia os PDFs."""
+    if not GOOGLE_DRIVE_TOKEN:
+        st.info("ℹ️ Token do Google Drive não configurado nos Secrets. Etapa do Drive ignorada.")
+        return None
 
-# --- 1. ENTRADA DO USUÁRIO ---
-termo_busca = st.text_input("O que você deseja pesquisar?", placeholder="Ex: eleições 2026, tecnologia...")
+    try:
+        creds = Credentials.from_authorized_user_info(GOOGLE_DRIVE_TOKEN)
+        service = build('drive', 'v3', credentials=creds)
 
-def buscar_noticias_36h(query, api_key):
-    """Busca notícias/documentos publicados nas últimas 36h."""
-    if not api_key or api_key == "SUA_CHAVE_DO_SERPER_AQUI":
-        return [
-            {"title": f"Últimas atualizações sobre {query} - Portal A", "link": "https://noticias.exemplo.com/materia-1", "snippet": "Análise detalhada das movimentações das últimas 24h.", "source": "Portal A"},
-            {"title": f"Documento Oficial e Notas sobre {query}", "link": "https://gov.exemplo.br/documento-oficial", "snippet": "Publicação oficial do relatório atualizado.", "source": "Diário Oficial"},
-            {"title": f"Análise Especial: Impactos de {query}", "link": "https://analise.exemplo.com/artigo-2", "snippet": "Especialistas discutem os desdobramentos mais recentes.", "source": "Blog de Análise"}
-        ]
-    
-    url = "https://google.serper.dev/news"
-    payload = {"q": f"{query} when:36h", "gl": "br", "hl": "pt-br"}
-    headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
-    response = requests.post(url, headers=headers, json=payload)
-    
-    if response.status_code == 200:
-        results = response.json().get('news', [])
-        return [{"title": r.get('title'), "link": r.get('link'), "snippet": r.get('snippet'), "source": r.get('source')} for r in results]
-    else:
-        st.error("Erro na busca de notícias. Verifique a chave da API de busca.")
-        return []
+        data_atual = datetime.datetime.now().strftime("%d-%m-%Y")
+        nome_pasta = f"{nome_pesquisa}_{data_atual}"
 
-# --- 2. BUSCA E EXIBIÇÃO ---
-if st.button("Buscar conteúdos (Últimas 36h)", type="primary"):
+        folder_metadata = {
+            'name': nome_pasta,
+            'mimeType': 'application/vnd.google-apps.folder'
+        }
+        folder = service.files().create(body=folder_metadata, fields='id').execute()
+        folder_id = folder.get('id')
+
+        for pdf in arquivos_pdf:
+            file_metadata = {
+                'name': pdf['filename'],
+                'parents': [folder_id]
+            }
+            media = MediaIoBaseUpload(io.BytesIO(pdf['bytes']), mimetype='application/pdf')
+            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+        return folder_id
+    except Exception as e:
+        st.error(f"Erro ao salvar no Google Drive: {e}")
+        return None
+
+# --- INTERFACE PRINCIPAL ---
+termo_busca = st.text_input("Digite o tema da pesquisa acadêmica:", placeholder="Ex: inteligência artificial na saúde pública")
+
+if st.button("Executar Pesquisa e Fluxo de Trabalho", type="primary"):
     if not termo_busca:
-        st.warning("Por favor, digite um assunto para pesquisar.")
+        st.warning("Por favor, digite um tema.")
+    elif not GEMINI_API_KEY:
+        st.error("Configure sua GEMINI_API_KEY nos Secrets do Streamlit Cloud.")
     else:
-        with st.spinner("Buscando fontes e produções documentais recentes..."):
-            st.session_state['resultados'] = buscar_noticias_36h(termo_busca, serper_api_key)
-            st.session_state['termo_pesquisado'] = termo_busca
+        st.markdown("---")
+        client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- 3. SELEÇÃO COM CHECKBOXES ---
-if 'resultados' in st.session_state and st.session_state['resultados']:
-    st.subheader(f"Resultados encontrados para: '{st.session_state['termo_pesquisado']}'")
-    st.write("Marque as fontes e produções documentais que deseja analisar:")
-
-    fontes_selecionadas = []
-    
-    for idx, item in enumerate(st.session_state['resultados']):
-        col1, col2 = st.columns([0.05, 0.95])
-        with col1:
-            marcado = st.checkbox("", key=f"flag_{idx}", value=True)
-        with col2:
-            st.markdown(f"**[{item['title']}]({item['link']})** - *Fonte: {item['source']}*")
-            st.caption(item['snippet'])
-            st.write("---")
-        
-        if marcado:
-            fontes_selecionadas.append(item)
-
-    # --- 4. CONEXÃO COM O GEMINI & PROCESSAMENTO ---
-    st.subheader("🚀 Processamento e Análise no Gemini")
-    
-    if fontes_selecionadas:
-        st.success(f"{len(fontes_selecionadas)} fonte(s) selecionada(s).")
-        
-        col_acao1, col_acao2 = st.columns(2)
-        with col_acao1:
-            modelo_consumo = st.selectbox(
-                "Escolha o modelo de consumo da pesquisa:",
-                [
-                    "Resumo Executivo Geral",
-                    "Linha do Tempo dos Fatos",
-                    "Análise Crítica e Pontos de Vista",
-                    "Perguntas e Respostas (FAQ)",
-                    "Roteiro de Apresentação / Briefing"
-                ]
-            )
+        # PASSO 1: Busca Nativa do Google Acadêmico via Gemini com Google Search Grounding
+        with st.spinner("1/3 - Buscando os 5 principais artigos acadêmicos em português..."):
+            prompt_busca = f"""
+            Pesquise no Google Acadêmico exatamente 5 artigos científicos e produções acadêmicas em PORTUGUÊS (Brasil) sobre o tema: "{termo_busca}".
             
-        with col_acao2:
-            st.write(" ")
-            st.write(" ")
-            enviar_notebook = st.button("Analisar com o Gemini", type="primary")
+            Para cada um dos 5 artigos encontrados, forneça:
+            1. Título do artigo
+            2. Nome da publicação/revista/repositório
+            3. Resumo com as descobertas principais
+            4. Link direto/URL acessível para visualização ou download do PDF (priorize links diretos de .pdf de fontes como Scielo, Google Scholar, ResearchGate ou repositórios universitários .edu.br / .br)
+            """
 
-        if enviar_notebook:
-            if not gemini_api_key or gemini_api_key == "SUA_CHAVE_DO_GEMINI_AQUI":
-                st.error("Configure sua GEMINI_API_KEY nos Secrets do Streamlit Cloud.")
+            try:
+                # Habilita a ferramenta de busca do Google
+                response_busca = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt_busca,
+                    config=types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
+                    )
+                )
+
+                st.subheader("📚 Fontes e Artigos Encontrados:")
+                st.markdown(response_busca.text)
+
+                # Extrai links informados nas fontes da resposta Grounding
+                urls_encontradas = []
+                if response_busca.candidates and response_busca.candidates[0].grounding_metadata:
+                    metadata = response_busca.candidates[0].grounding_metadata
+                    if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
+                        for chunk in metadata.grounding_chunks:
+                            if hasattr(chunk, 'web') and chunk.web and chunk.web.uri:
+                                urls_encontradas.append(chunk.web.uri)
+
+                # Remove URLs duplicadas
+                urls_encontradas = list(dict.fromkeys(urls_encontradas))[:5]
+
+                if urls_encontradas:
+                    st.subheader("🔗 Links/URLs Diretas das Fontes:")
+                    for idx, url in enumerate(urls_encontradas, 1):
+                        st.write(f"{idx}. [{url}]({url})")
+
+            except Exception as e:
+                st.error(f"Erro ao consultar a API do Gemini: {e}")
+                st.stop()
+
+        # PASSO 2: Tentativa de Download e Envio para o Drive
+        with st.spinner("2/3 - Tentando baixar os arquivos PDF e salvar no Google Drive..."):
+            pdfs_baixados = []
+            for idx, url in enumerate(urls_encontradas, 1):
+                pdf_bytes = baixar_pdf(url)
+                if pdf_bytes:
+                    nome_arq = f"Artigo_{idx}_{termo_busca.replace(' ', '_')}.pdf"
+                    pdfs_baixados.append({"filename": nome_arq, "bytes": pdf_bytes})
+
+            if pdfs_baixados:
+                st.success(f"{len(pdfs_baixados)} PDF(s) baixados com sucesso!")
+                folder_id = salvar_no_google_drive(termo_busca, pdfs_baixados)
+                if folder_id:
+                    st.success("📁 Pasta criada e arquivos enviados para o Google Drive com sucesso!")
             else:
-                with st.spinner("Sintetizando fontes e gerando o relatório..."):
-                    try:
-                        # Inicializa o cliente oficial da nova SDK
-                        client = genai.Client(api_key=gemini_api_key)
-                        
-                        contexto_fontes = "\n\n".join([
-                            f"Título: {f['title']}\nFonte: {f['source']}\nLink: {f['link']}\nTrecho: {f['snippet']}"
-                            for f in fontes_selecionadas
-                        ])
-                        
-                        prompt_sistema = f"""
-                        Você é um assistente de pesquisa especializado.
-                        Analise as seguintes fontes sobre '{st.session_state['termo_pesquisado']}' coletadas nas últimas 36 horas:
+                st.warning("Nenhum PDF direto editável pôde ser baixado automaticamente dos links encontrados. Prosseguindo para a geração do roteiro com base nas fontes sumarizadas.")
 
-                        --- FONTES COLETADAS ---
-                        {contexto_fontes}
-                        --- FIM DAS FONTES ---
+        # PASSO 3: Geração do Roteiro de Podcast (Audio Overview)
+        with st.spinner("3/3 - Gerando o Roteiro do Podcast baseado nas 5 fontes..."):
+            try:
+                prompt_podcast = f"""
+                Você é um roteirista de podcasts científicos.
+                Com base nos 5 artigos acadêmicos analisados acima sobre o tema "{termo_busca}":
 
-                        Elabore uma resposta estruturada seguindo o formato: {modelo_consumo}.
-                        Sempre cite as fontes/links fornecidos quando mencionar informações específicas.
-                        """
-                        
-                        response = client.models.generate_content(
-                            model="gemini-2.5-flash",
-                            contents=prompt_sistema
-                        )
-                        
-                        st.session_state['relatorio_gerado'] = response.text
-                        st.session_state['modelo_escolhido'] = modelo_consumo
-                        
-                    except Exception as e:
-                        st.error(f"Ocorreu um erro ao processar com a API do Gemini: {e}")
+                Conteúdo dos artigos pesquisados:
+                {response_busca.text}
 
-        # --- EXIBIÇÃO DO RELATÓRIO E BOTÃO DE DOWNLOAD ---
-        if 'relatorio_gerado' in st.session_state:
-            st.balloons()
-            st.subheader(f"📑 Resultado: {st.session_state['modelo_escolhido']}")
-            st.markdown(st.session_state['relatorio_gerado'])
+                Crie um ROTEIRO COMPLETO E DETALHADO DE PODCAST (Audio Overview) entre 2 apresentadores:
+                - **Apresentador 1 (Anfitrião):** Conduz o programa, faz perguntas inteligentes e conecta os assuntos.
+                - **Apresentador 2 (Especialista):** Explica os métodos, conceitos e conclusões das pesquisas de forma didática.
 
-            data_atual = datetime.datetime.now().strftime("%d/%m/%Y às %H:%M")
-            conteudo_download = f"""================================================================================
-RELATÓRIO DE PESQUISA: {st.session_state['termo_pesquisado'].upper()}
-Modelo de Consumo: {st.session_state['modelo_escolhido']}
-Data da Pesquisa: {data_atual}
-================================================================================
+                Escreva em português do Brasil, em tom engajador, profissional e fluido.
+                """
 
-{st.session_state['relatorio_gerado']}
+                response_podcast = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt_podcast
+                )
 
-================================================================================
-Fontes Utilizadas na Análise:
-"""
-            for f in fontes_selecionadas:
-                conteudo_download += f"- {f['title']} ({f['source']}): {f['link']}\n"
+                st.markdown("---")
+                st.subheader("🎙️ Roteiro de Podcast Gerado")
+                st.markdown(response_podcast.text)
 
-            nome_arquivo = f"pesquisa_{st.session_state['termo_pesquisado'].lower().replace(' ', '_')}.txt"
+                st.download_button(
+                    label="📥 Baixar Roteiro (.txt)",
+                    data=response_podcast.text,
+                    file_name=f"roteiro_podcast_{termo_busca.replace(' ', '_')}.txt",
+                    mime="text/plain"
+                )
 
-            st.write("---")
-            st.download_button(
-                label="📥 Baixar Relatório em Arquivo de Texto (.txt)",
-                data=conteudo_download,
-                file_name=nome_arquivo,
-                mime="text/plain",
-                type="secondary"
-            )
-
-    else:
-        st.warning("Selecione pelo menos uma fonte para continuar.")
+            except Exception as e:
+                st.error(f"Erro ao gerar o roteiro do podcast: {e}")
